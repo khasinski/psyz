@@ -628,6 +628,7 @@ static void QuitPlatform(void) {
         sdl3_window = NULL;
         is_window_visible = false;
     }
+    Psyz_AudioDestroy();
     SDL_Quit();
     is_platform_initialized = false;
     is_platform_init_successful = false;

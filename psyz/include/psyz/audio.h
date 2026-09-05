@@ -22,7 +22,10 @@ int Psyz_AudioInit(void);
 /**
  * @brief Shut down the audio subsystem and release its resources
  *
- * Typically used to undo the audio subsystem init for audio offline rendering.
+ * Idempotent, including after failed initialization. Stops the host callback
+ * before releasing its dependencies. Call on the lifecycle/main thread, not
+ * from an audio callback or while holding Psyz_AudioLock, and before SDL_Quit.
+ * Does not reset disc/sequence/game state or shut down SDL's audio subsystem.
  */
 void Psyz_AudioDestroy(void);
 

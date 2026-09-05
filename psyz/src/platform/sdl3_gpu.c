@@ -97,6 +97,17 @@ SDL_GPUTexture* Psyz_VideoGetVramTexture_SDL3GPU(void) {
     return vram_render;
 }
 
+bool Psyz_VideoGetPresentationDevice_SDL3GPU(SDL_Window** window,
+                                          SDL_GPUDevice** gpu_device) {
+    if (window) *window = NULL;
+    if (gpu_device) *gpu_device = NULL;
+    if (!window || !gpu_device || !is_platform_init_successful ||
+        !device || !sdl3_window) return false;
+    *window = sdl3_window;
+    *gpu_device = device;
+    return true;
+}
+
 SDL_GPUTexture* Psyz_VideoSnapshotVramTexture_SDL3GPU(void) {
     SDL_GPUCommandBuffer* cmd;
     SDL_GPUCopyPass* copy;
@@ -886,11 +897,18 @@ static void PlatformBackend_Present(void) {
 
 static void QuitPlatform(void) {
     VramReadCacheReset(&vram_read_cache);
-    if (overlay_destroy_cb) {
+    /* Retire encoded work before clients release resources referenced by it.
+     * Waiting alone does not submit the backend's pending command buffer. */
+    if (device) {
+        SubmitCmd();
+        SDL_WaitForGPUIdle(device);
+    }
+    /* Failed/never-started devices have no published presentation handles.
+     * Clients must not receive a destroy event for an unpublished lifetime. */
+    if (is_platform_init_successful && overlay_destroy_cb) {
         overlay_destroy_cb();
     }
     if (device) {
-        SDL_WaitForGPUIdle(device);
         if (pipe_tri_add) {
             SDL_ReleaseGPUGraphicsPipeline(device, pipe_tri_add);
             pipe_tri_add = NULL;
@@ -967,6 +985,9 @@ static void QuitPlatform(void) {
         sdl3_window = NULL;
         is_window_visible = false;
     }
+    /* SDL_Quit destroys device streams too; clear our owner first so a later
+     * platform/audio initialization cannot reuse dangling stream state. */
+    Psyz_AudioDestroy();
     SDL_Quit();
     is_platform_initialized = false;
     is_platform_init_successful = false;

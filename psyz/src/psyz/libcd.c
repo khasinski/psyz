@@ -363,7 +363,9 @@ void Psyz_CdShellOpen(int is_open) {
     }
 }
 
-int Psyz_CdSetDiskPath(const char* diskPath) {
+static void reset_disc_playback(void);
+
+static int set_disk_path_unlocked(const char* diskPath) {
     is_disk_loaded = 0;
     g_track_count = 0;
     memset(g_tracks, 0, sizeof(g_tracks));
@@ -382,7 +384,15 @@ int Psyz_CdSetDiskPath(const char* diskPath) {
     return 0;
 }
 
-int Psyz_CdSetSectorBackend(const PsyzCdTrackInfo* tracks, int track_count,
+int Psyz_CdSetDiskPath(const char* diskPath) {
+    Psyz_AudioLock();
+    reset_disc_playback();
+    int result = set_disk_path_unlocked(diskPath);
+    Psyz_AudioUnlock();
+    return result;
+}
+
+static int set_sector_backend_unlocked(const PsyzCdTrackInfo* tracks, int track_count,
                             int lead_out, PsyzCdSectorReadCB read_cb,
                             void* user) {
     int index;
@@ -418,6 +428,17 @@ int Psyz_CdSetSectorBackend(const PsyzCdTrackInfo* tracks, int track_count,
     is_disk_loaded = 1;
     DEBUGF("Virtual sector disc set: %d tracks", track_count);
     return 0;
+}
+
+int Psyz_CdSetSectorBackend(const PsyzCdTrackInfo* tracks, int track_count,
+                            int lead_out, PsyzCdSectorReadCB read_cb,
+                            void* user) {
+    Psyz_AudioLock();
+    reset_disc_playback();
+    int result = set_sector_backend_unlocked(tracks, track_count, lead_out,
+                                             read_cb, user);
+    Psyz_AudioUnlock();
+    return result;
 }
 
 int Psyz_CdGetTrackSector(int track) {
@@ -933,6 +954,22 @@ static void psyz_stop() {
     cd_buf_pos = 0;
     cd_buf_count = 0;
     Psyz_AudioUnlock();
+}
+
+/* Mount/unmount already holds the recursive audio mutex. Retire the old
+ * stream before changing callback ownership, including failed mount attempts.
+ * Mixer volume is preserved; decoder history/filters belong to the old disc. */
+static void reset_disc_playback(void) {
+    psyz_stop();
+    xa_reset_stream();
+    xa.filter_set = 0;
+    xa_end_abs_sector = -1;
+    backend_stream_end = 0;
+    backend_stream_swap_audio = 0;
+    cdda_start_sector = 0;
+    cdda_frames_played = 0;
+    cdda_frames_pulled = 0;
+    cdda_energy = 0;
 }
 
 static void psyz_pause() {

@@ -30,6 +30,9 @@ typedef int (*PsyzCdReadCB)(struct PsyzCdRead* read);
  * @brief Set path to CUE file, simulating a CD loaded
  *
  * Passing a NULL will unset a previously set disk path.
+ * Every call stops the previous stream and disc-owned buffered audio, even
+ * when the new path fails. Serializes with the mixer; call on the lifecycle
+ * thread, not from a sector-read callback.
  *
  * @param diskPath Path to the CUE file, or NULL to unset
  * @return 0 on success, otherwise CUE parsing failed
@@ -46,7 +49,10 @@ typedef struct PsyzCdTrackInfo {
 typedef int (*PsyzCdSectorReadCB)(unsigned int sector, void* buffer,
                                   void* user);
 
-/** Install a virtual raw-sector disc, used by compressed-image frontends. */
+/** Install a virtual raw-sector disc, used by compressed-image frontends.
+ * Stops/clears old playback even on failure. The callback/user are borrowed
+ * until the next mount/unmount returns; retire their storage only afterwards.
+ * Serializes with the mixer; do not call from the sector-read callback. */
 int Psyz_CdSetSectorBackend(const PsyzCdTrackInfo* tracks, int track_count,
                             int lead_out_sector, PsyzCdSectorReadCB read_cb,
                             void* user);

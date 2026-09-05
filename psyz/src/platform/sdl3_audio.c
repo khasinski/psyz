@@ -86,9 +86,17 @@ static void SDLCALL audio_callback(void* userdata, SDL_AudioStream* stream,
 }
 
 static bool is_audio_init = false;
+static bool exit_cleanup_registered = false;
 int Psyz_AudioInit(void) {
     if (is_audio_init) {
         return 0;
+    }
+    if (!exit_cleanup_registered) {
+        if (atexit(Psyz_AudioDestroy) != 0) {
+            ERRORF("failed to register audio exit cleanup");
+            return -1;
+        }
+        exit_cleanup_registered = true;
     }
     Psyz_SpuInit();
     {
@@ -99,6 +107,7 @@ int Psyz_AudioInit(void) {
     if (!SDL_WasInit(SDL_INIT_AUDIO)) {
         if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
             ERRORF("failed to init SDL audio: %s", SDL_GetError());
+            Psyz_AudioDestroy();
             return -1;
         }
     }
@@ -111,6 +120,7 @@ int Psyz_AudioInit(void) {
     mutex = SDL_CreateMutex();
     if (!mutex) {
         ERRORF("failed to create audio mutex: %s", SDL_GetError());
+        Psyz_AudioDestroy();
         return -1;
     }
 
@@ -118,14 +128,17 @@ int Psyz_AudioInit(void) {
         SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, audio_callback, NULL);
     if (!sdl_stream) {
         ERRORF("failed to open audio device: %s", SDL_GetError());
-        SDL_DestroyMutex(mutex);
-        mutex = NULL;
+        Psyz_AudioDestroy();
         return -1;
     }
     /* Opening starts the stream paused.  The callback takes this mutex, so it
      * must exist before the device is resumed; previously the first callback
      * raced initialization and could drop or split the opening XA/VAB data. */
-    SDL_ResumeAudioStreamDevice(sdl_stream);
+    if (!SDL_ResumeAudioStreamDevice(sdl_stream)) {
+        ERRORF("failed to resume audio device: %s", SDL_GetError());
+        Psyz_AudioDestroy();
+        return -1;
+    }
 
     is_audio_init = true;
     DEBUGF("audio initialized");
@@ -133,6 +146,12 @@ int Psyz_AudioInit(void) {
 }
 
 void Psyz_AudioDestroy(void) {
+    /* Destroying the device stream quiesces its callback. Its dependencies
+     * must remain alive until then. Do not hold mutex while waiting here. */
+    if (sdl_stream) {
+        SDL_DestroyAudioStream(sdl_stream);
+        sdl_stream = NULL;
+    }
     if (pcm_dump) {
         fclose(pcm_dump);
         pcm_dump = NULL;
@@ -140,10 +159,6 @@ void Psyz_AudioDestroy(void) {
     if (mutex) {
         SDL_DestroyMutex(mutex);
         mutex = NULL;
-    }
-    if (sdl_stream) {
-        SDL_DestroyAudioStream(sdl_stream);
-        sdl_stream = NULL;
     }
     is_audio_init = false;
 }

@@ -35,6 +35,12 @@ PsyzPresentSourceCB_SDL3GPU Psyz_PresentSource_SDL3GPU(
 SDL_GPUTexture* Psyz_VideoGetVramTexture_SDL3GPU(void);
 SDL_GPUTexture* Psyz_VideoSnapshotVramTexture_SDL3GPU(void);
 
+// Borrow the already-initialized presentation device; never creates one.
+// Handles remain valid until the overlay destroy callback. Outputs are cleared
+// on failure. Useful when attaching a host renderer after platform startup.
+bool Psyz_VideoGetPresentationDevice_SDL3GPU(SDL_Window** window,
+                                          SDL_GPUDevice** gpu_device);
+
 #ifdef __cplusplus
 }
 #endif
