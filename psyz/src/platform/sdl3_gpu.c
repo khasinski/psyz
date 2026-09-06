@@ -1380,11 +1380,6 @@ static bool PsxTextureTriangleSpan(const PreparedTextureTriangle *triangle,
     return TextureTriangleSpanAt(triangle, y, span);
 }
 
-static void PsxTextureSpanSample(const PreparedTextureSpan* span, int x,
-                                 u16* u, u16* v, u8* r, u8* g, u8* b) {
-    TextureSpanSample(span, x, u, v, r, g, b);
-}
-
 static TextureSamplePlane ModernTexturePrepare(const Vertex p[3]) {
     TextureSampleVertex vertices[3];
     for (int i = 0; i < 3; ++i) {
@@ -1562,14 +1557,16 @@ static void Draw_FillTexturedQuadScanlineGaps(const Vertex source[4],
             bool covered0 = ModernTriangleContains(&coverage[0], x, y);
             bool covered1 = ModernTriangleContains(&coverage[1], x, y);
             if (!expected0 && !expected1) continue;
+            /* Gouraud correction only fills uncovered endpoints; covered
+             * pixels need neither a UV comparison nor colour interpolation. */
+            if (gouraud && (covered0 || covered1)) continue;
 
             /* The PS1 submits triangle 0 followed by triangle 1. If their
              * inclusive spans overlap, triangle 1 owns the final texel. */
             const PreparedTextureSpan* sample = &samples[expected1 ? 1 : 0];
             u16 expected_u, expected_v;
             u8 expected_r, expected_g, expected_b;
-            PsxTextureSpanSample(sample, x, &expected_u, &expected_v,
-                                 &expected_r, &expected_g, &expected_b);
+            TextureSpanSampleUV(sample, x, &expected_u, &expected_v);
             bool correct = !covered0 && !covered1;
             if (!correct && !gouraud) {
                 const TextureSamplePlane* modern = &planes[covered1 ? 1 : 0];
@@ -1580,11 +1577,14 @@ static void Draw_FillTexturedQuadScanlineGaps(const Vertex source[4],
                     TextureSamplesDiffer(source, expected_u, expected_v,
                                          modern_u, modern_v);
             }
-            if (correct)
+            if (correct) {
+                TextureSpanSampleColor(sample, x,
+                                       &expected_r, &expected_g, &expected_b);
                 Draw_EnqueueCompatibilityPixel(source, x, y, true,
                                                expected_u, expected_v,
                                                expected_r, expected_g,
                                                expected_b);
+            }
         }
     }
 }

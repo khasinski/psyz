@@ -51,22 +51,34 @@ static inline PreparedTextureSpan TextureSpanPrepare(const RasterTextureSpan *sp
         step_u, step_v, step_r, step_g, step_b};
 }
 
-static inline void TextureSpanSample(const PreparedTextureSpan *span, int x,
-        uint16_t *u, uint16_t *v, uint8_t *r, uint8_t *g, uint8_t *b) {
+/* Coverage/texel comparison needs only UV. Defer colour interpolation until
+ * a compatibility pixel is actually required. */
+static inline void TextureSpanSampleUV(const PreparedTextureSpan *span, int x,
+        uint16_t *u, uint16_t *v) {
     int fixed_u = span->fixed_u, step_u = span->step_u;
     int fixed_v = span->fixed_v, step_v = span->step_v;
+    fixed_u += (x - span->x_start) * step_u;
+    fixed_v += (x - span->x_start) * step_v;
+    *u = (uint16_t)((fixed_u >> 16) & 0xff);
+    *v = (uint16_t)((fixed_v >> 16) & 0xff);
+}
+
+static inline void TextureSpanSampleColor(const PreparedTextureSpan *span, int x,
+        uint8_t *r, uint8_t *g, uint8_t *b) {
     int fixed_r = span->fixed_r, step_r = span->step_r;
     int fixed_g = span->fixed_g, step_g = span->step_g;
     int fixed_b = span->fixed_b, step_b = span->step_b;
-    fixed_u += (x - span->x_start) * step_u;
-    fixed_v += (x - span->x_start) * step_v;
     fixed_r += (x - span->x_start) * step_r;
     fixed_g += (x - span->x_start) * step_g;
     fixed_b += (x - span->x_start) * step_b;
-    *u = (uint16_t)((fixed_u >> 16) & 0xff);
-    *v = (uint16_t)((fixed_v >> 16) & 0xff);
     *r = (uint8_t)((fixed_r >> 16) < 0 ? 0 : (fixed_r >> 16) > 255 ? 255 : (fixed_r >> 16));
     *g = (uint8_t)((fixed_g >> 16) < 0 ? 0 : (fixed_g >> 16) > 255 ? 255 : (fixed_g >> 16));
     *b = (uint8_t)((fixed_b >> 16) < 0 ? 0 : (fixed_b >> 16) > 255 ? 255 : (fixed_b >> 16));
+}
+
+static inline void TextureSpanSample(const PreparedTextureSpan *span, int x,
+        uint16_t *u, uint16_t *v, uint8_t *r, uint8_t *g, uint8_t *b) {
+    TextureSpanSampleUV(span, x, u, v);
+    TextureSpanSampleColor(span, x, r, g, b);
 }
 #endif
