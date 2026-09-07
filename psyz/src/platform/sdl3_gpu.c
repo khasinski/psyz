@@ -1427,8 +1427,8 @@ static bool TextureSamplesDiffer(const Vertex source[4], u16 expected_u,
     return expected_u != modern_u || expected_v != modern_v;
 }
 
-static void Draw_EnqueueCompatibilityPixel(const Vertex source[4], int x,
-                                           int y, bool textured, u16 u,
+static void Draw_EnqueueCompatibilityRun(const Vertex source[4], int x,
+                                           int y, int width, bool textured, u16 u,
                                            u16 v, u8 r, u8 g, u8 b) {
     Draw_EnsureBufferWillNotOverflow(4, 6);
     Vertex* q = vertex_cur;
@@ -1444,9 +1444,10 @@ static void Draw_EnqueueCompatibilityPixel(const Vertex source[4], int x,
      * independently in all four destination vertices. */
     q[0] = q[1] = q[2] = q[3] = pixel;
     q[0].x = q[2].x = (short)(x - draw_offset.x);
-    q[1].x = q[3].x = (short)(x + 1 - draw_offset.x);
+    q[1].x = q[3].x = (short)(x + width - draw_offset.x);
     q[0].y = q[1].y = (short)(y - draw_offset.y);
     q[2].y = q[3].y = (short)(y + 1 - draw_offset.y);
+    if (width > 1) q[1].u = q[3].u = u + width;
     index_cur[0] = n_vertices + 0;
     index_cur[1] = n_vertices + 1;
     index_cur[2] = n_vertices + 2;
@@ -1454,6 +1455,13 @@ static void Draw_EnqueueCompatibilityPixel(const Vertex source[4], int x,
     index_cur[4] = n_vertices + 3;
     index_cur[5] = n_vertices + 2;
     Draw_EnqueueBuffer(4, 6);
+    batch_saved_vertices += (width - 1) * 4;
+    batch_saved_indices += (width - 1) * 6;
+}
+
+static void Draw_EnqueueCompatibilityPixel(const Vertex source[4], int x,
+        int y, bool textured, u16 u, u16 v, u8 r, u8 g, u8 b) {
+    Draw_EnqueueCompatibilityRun(source, x, y, 1, textured, u, v, r, g, b);
 }
 
 /* Metal rasterizes a PS1 F4 as two conventional triangles.  The PS1 instead
@@ -1615,10 +1623,29 @@ static void Draw_FillTexturedQuadScanlineGaps(const Vertex source[4],
             if (correct) {
                 TextureSpanSampleColor(sample, x,
                                        &expected_r, &expected_g, &expected_b);
-                Draw_EnqueueCompatibilityPixel(source, x, y, true,
+                int run = 1;
+                static int reference = -1;
+                if (reference < 0) reference = getenv("PSYZ_REFERENCE_CORRECTION_PIXELS") != NULL;
+                if (!reference && correct_all) {
+                    int end = expected1 ? span1.x_end : span0.x_end;
+                    if (!expected1 && has1 && span1.x_start > x && end >= span1.x_start)
+                        end = span1.x_start - 1;
+                    if (end > x_max) end = x_max;
+                    run = TextureSpanUnitRun(sample, expected_u, end - x + 1);
+                }
+                /* Do not move the original per-pixel flush boundary: later
+                 * primitives can sample pixels written by an earlier batch. */
+                Draw_EnsureBufferWillNotOverflow(4, 6);
+                int available = (MAX_VERTEX_COUNT - n_vertices - batch_saved_vertices) / 4;
+                int index_available = (MAX_INDEX_COUNT - n_indices - batch_saved_indices) / 6;
+                if (available > index_available) available = index_available;
+                if (available < 1) return; /* A failed GPU flush left no space. */
+                if (run > available) run = available;
+                Draw_EnqueueCompatibilityRun(source, x, y, run, true,
                                                expected_u, expected_v,
                                                expected_r, expected_g,
                                                expected_b);
+                i += run - 1;
             }
         }
     }
@@ -2231,6 +2258,7 @@ void Draw_MoveImage(PS1_RECT* rect, unsigned int x, unsigned int y) {
 void Draw_ResetBuffer(void) {
     n_vertices = 0;
     n_indices = 0;
+    batch_saved_vertices = batch_saved_indices = 0;
     vertex_cur = vertex_buf;
     index_cur = index_buf;
     batch_has_texture = false;

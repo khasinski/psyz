@@ -81,4 +81,15 @@ static inline void TextureSpanSample(const PreparedTextureSpan *span, int x,
     TextureSpanSampleUV(span, x, u, v);
     TextureSpanSampleColor(span, x, r, g, b);
 }
+
+/* A forward unit-UV row with constant V/color can use one rectangle. Stop
+ * before byte UV wrap; the caller also bounds it by triangle ownership. */
+static inline int TextureSpanUnitRun(const PreparedTextureSpan *span,
+                                    uint16_t first_u, int remaining) {
+    if (remaining < 1) return 0;
+    if (span->step_u != 65536 || span->step_v || span->step_r ||
+        span->step_g || span->step_b || first_u > 255) return 1;
+    int before_wrap = 256 - first_u;
+    return remaining < before_wrap ? remaining : before_wrap;
+}
 #endif

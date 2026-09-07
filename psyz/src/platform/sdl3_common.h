@@ -928,6 +928,9 @@ static Vertex* vertex_cur;
 static unsigned short* index_cur;
 static unsigned short n_vertices;
 static int n_indices;
+/* Compressed correction runs still consume their original logical budget:
+ * preserve flush boundaries and therefore VRAM feedback visibility. */
+static int batch_saved_vertices, batch_saved_indices;
 
 // represents a texture window as a 32-bit integer for fast aligned copies
 #define TWIN_PACK(and_x, and_y, or_x, or_y)                                    \
@@ -936,8 +939,8 @@ static int n_indices;
 static unsigned int cur_twin = TWIN_PACK(0xFF, 0xFF, 0x00, 0x00);
 
 static void Draw_EnsureBufferWillNotOverflow(int vertices, int indices) {
-    bool bufferFull = n_vertices + vertices > MAX_VERTEX_COUNT ||
-                      n_indices + indices > MAX_INDEX_COUNT;
+    bool bufferFull = n_vertices + batch_saved_vertices + vertices > MAX_VERTEX_COUNT ||
+                      n_indices + batch_saved_indices + indices > MAX_INDEX_COUNT;
     if (bufferFull) {
         Draw_FlushBuffer();
     }
