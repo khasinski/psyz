@@ -1432,18 +1432,21 @@ static void Draw_EnqueueCompatibilityPixel(const Vertex source[4], int x,
                                            u16 v, u8 r, u8 g, u8 b) {
     Draw_EnsureBufferWillNotOverflow(4, 6);
     Vertex* q = vertex_cur;
-    q[0] = q[1] = q[2] = q[3] = source[0];
+    Vertex pixel = source[0];
+    if (textured) {
+        pixel.u = u;
+        pixel.v = v;
+    }
+    pixel.r = r;
+    pixel.g = g;
+    pixel.b = b;
+    /* Set common attributes before replication instead of overwriting them
+     * independently in all four destination vertices. */
+    q[0] = q[1] = q[2] = q[3] = pixel;
     q[0].x = q[2].x = (short)(x - draw_offset.x);
     q[1].x = q[3].x = (short)(x + 1 - draw_offset.x);
     q[0].y = q[1].y = (short)(y - draw_offset.y);
     q[2].y = q[3].y = (short)(y + 1 - draw_offset.y);
-    if (textured) {
-        q[0].u = q[1].u = q[2].u = q[3].u = u;
-        q[0].v = q[1].v = q[2].v = q[3].v = v;
-    }
-    q[0].r = q[1].r = q[2].r = q[3].r = r;
-    q[0].g = q[1].g = q[2].g = q[3].g = g;
-    q[0].b = q[1].b = q[2].b = q[3].b = b;
     index_cur[0] = n_vertices + 0;
     index_cur[1] = n_vertices + 1;
     index_cur[2] = n_vertices + 2;
