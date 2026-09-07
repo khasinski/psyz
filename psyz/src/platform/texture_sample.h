@@ -73,4 +73,15 @@ static inline bool TextureSampleAt(const TextureSamplePlane *p, int x, int y,
            fabs(raw_v - (floor_v + 1.0)) < 1e-7;
 }
 
+/* Prepared from integer vertices: an axis with integral derivatives remains
+ * integral at every integer pixel. The original sampler therefore always
+ * requests a correction, even when the other UV axis is stretched. */
+static inline bool TextureSampleAlwaysUnstable(const TextureSamplePlane *p) {
+    if (p->degenerate) return true;
+    return (isfinite(p->du_dx) && isfinite(p->du_dy) &&
+            floor(p->du_dx) == p->du_dx && floor(p->du_dy) == p->du_dy) ||
+           (isfinite(p->dv_dx) && isfinite(p->dv_dy) &&
+            floor(p->dv_dx) == p->dv_dx && floor(p->dv_dy) == p->dv_dy);
+}
+
 #endif

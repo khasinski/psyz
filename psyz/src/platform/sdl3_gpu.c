@@ -1527,6 +1527,8 @@ static void Draw_FillTexturedQuadScanlineGaps(const Vertex source[4],
         PrepareTextureTriangle(vertices0), PrepareTextureTriangle(vertices1)};
     const TextureSamplePlane planes[2] = {
         ModernTexturePrepare(vertices0), ModernTexturePrepare(vertices1)};
+    bool correct_all = !gouraud && TextureSampleAlwaysUnstable(&planes[0]) &&
+        TextureSampleAlwaysUnstable(&planes[1]);
     int y_min = p[0].y, y_max = p[0].y;
     for (int i = 1; i < 4; i++) {
         if (p[i].y < y_min) y_min = p[i].y;
@@ -1567,7 +1569,7 @@ static void Draw_FillTexturedQuadScanlineGaps(const Vertex source[4],
         TriangleCoverageSpan covered_rows[2] = {{1, 0}, {1, 0}};
         /* Division per row pays off for longer spans. Keep the point test
          * for short rows and Gouraud's at-most-four endpoint candidates. */
-        bool row_coverage = !gouraud && x_max - x_min >= 15;
+        bool row_coverage = !gouraud && !correct_all && x_max - x_min >= 15;
         if (row_coverage) {
             covered_rows[0] = TriangleCoverageRow(&coverage[0], y, x_min, x_max);
             covered_rows[1] = TriangleCoverageRow(&coverage[1], y, x_min, x_max);
@@ -1582,10 +1584,10 @@ static void Draw_FillTexturedQuadScanlineGaps(const Vertex source[4],
             }
             bool expected0 = has0 && x >= span0.x_start && x <= span0.x_end;
             bool expected1 = has1 && x >= span1.x_start && x <= span1.x_end;
-            bool covered0 = !row_coverage ? ModernTriangleContains(&coverage[0], x, y)
-                : x >= covered_rows[0].first && x <= covered_rows[0].last;
-            bool covered1 = !row_coverage ? ModernTriangleContains(&coverage[1], x, y)
-                : x >= covered_rows[1].first && x <= covered_rows[1].last;
+            bool covered0 = !correct_all && (!row_coverage ? ModernTriangleContains(&coverage[0], x, y)
+                : x >= covered_rows[0].first && x <= covered_rows[0].last);
+            bool covered1 = !correct_all && (!row_coverage ? ModernTriangleContains(&coverage[1], x, y)
+                : x >= covered_rows[1].first && x <= covered_rows[1].last);
             if (!expected0 && !expected1) continue;
             /* Gouraud correction only fills uncovered endpoints; covered
              * pixels need neither a UV comparison nor colour interpolation. */
