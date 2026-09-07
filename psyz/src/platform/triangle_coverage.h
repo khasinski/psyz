@@ -38,4 +38,36 @@ static inline bool TriangleCoverageContains(
     /* Preserve the compatibility path's rejection of exact vertices. */
     return zero_edges < 2;
 }
+
+typedef struct { int first, last; } TriangleCoverageSpan;
+
+/* Intersect the three integer edge inequalities once per scanline. The
+ * covered set is an interval; rejected exact vertices can only be endpoints.
+ * Bounds limit work and avoid converting unbounded edge intersections to int. */
+static inline TriangleCoverageSpan TriangleCoverageRow(
+        const PreparedTriangleCoverage *p, int y, int first, int last) {
+    const TriangleCoverageSpan empty = {1, 0};
+    if (p->degenerate || first > last) return empty;
+    int64_t lo = first, hi = last;
+    for (int i = 0; i < 3; ++i) {
+        int64_t a = p->dx[i];
+        int64_t b = p->dy[i] * y + p->constant[i];
+        int64_t threshold = p->inclusive[i] ? 0 : 1;
+        if (a > 0) {
+            int64_t n = threshold - b;
+            int64_t bound = n / a + (n % a > 0);
+            if (bound > lo) lo = bound;
+        } else if (a < 0) {
+            int64_t n = b - threshold, denominator = -a;
+            int64_t bound = n / denominator - (n % denominator < 0);
+            if (bound < hi) hi = bound;
+        } else if (b < threshold) return empty;
+        if (lo > hi) return empty;
+    }
+    if (!TriangleCoverageContains(p, (int)lo, y)) ++lo;
+    if (lo > hi) return empty;
+    if (!TriangleCoverageContains(p, (int)hi, y)) --hi;
+    if (lo > hi) return empty;
+    return (TriangleCoverageSpan){(int)lo, (int)hi};
+}
 #endif
