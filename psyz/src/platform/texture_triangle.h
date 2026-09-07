@@ -8,6 +8,7 @@ typedef struct { int x, y, u, v, r, g, b; } TextureTriangleVertex;
 typedef struct {
     TextureTriangleVertex vertices[3];
     int offset_x, offset_y;
+    bool constant_color;
 } PreparedTextureTriangle;
 
 /* Stable ordering is invariant across scanlines. Preserve equal-Y order and
@@ -15,7 +16,10 @@ typedef struct {
 static inline PreparedTextureTriangle TextureTrianglePrepare(
         const TextureTriangleVertex input[3], int offset_x, int offset_y) {
     PreparedTextureTriangle result = {{input[0], input[1], input[2]},
-                                      offset_x, offset_y};
+                                      offset_x, offset_y, false};
+    result.constant_color = input[0].r == input[1].r && input[0].r == input[2].r &&
+        input[0].g == input[1].g && input[0].g == input[2].g &&
+        input[0].b == input[1].b && input[0].b == input[2].b;
     for (int i = 1; i < 3; ++i) {
         TextureTriangleVertex key = result.vertices[i];
         int j = i;
@@ -43,26 +47,36 @@ static inline bool TextureTriangleSpanAt(const PreparedTextureTriangle *p,
         span->x_left = v[0].x + p->offset_x + (v[1].x - v[0].x) * t1;
         span->u_left = v[0].u + (v[1].u - v[0].u) * t1;
         span->v_left = v[0].v + (v[1].v - v[0].v) * t1;
-        span->r_left = (int)(v[0].r + (v[1].r - v[0].r) * t1);
-        span->g_left = (int)(v[0].g + (v[1].g - v[0].g) * t1);
-        span->b_left = (int)(v[0].b + (v[1].b - v[0].b) * t1);
+        if (!p->constant_color) {
+            span->r_left = (int)(v[0].r + (v[1].r - v[0].r) * t1);
+            span->g_left = (int)(v[0].g + (v[1].g - v[0].g) * t1);
+            span->b_left = (int)(v[0].b + (v[1].b - v[0].b) * t1);
+        }
     } else {
         if (y2 == y1) return false;
         t1 = (double)(y - y1) / (double)(y2 - y1);
         span->x_left = v[1].x + p->offset_x + (v[2].x - v[1].x) * t1;
         span->u_left = v[1].u + (v[2].u - v[1].u) * t1;
         span->v_left = v[1].v + (v[2].v - v[1].v) * t1;
-        span->r_left = (int)(v[1].r + (v[2].r - v[1].r) * t1);
-        span->g_left = (int)(v[1].g + (v[2].g - v[1].g) * t1);
-        span->b_left = (int)(v[1].b + (v[2].b - v[1].b) * t1);
+        if (!p->constant_color) {
+            span->r_left = (int)(v[1].r + (v[2].r - v[1].r) * t1);
+            span->g_left = (int)(v[1].g + (v[2].g - v[1].g) * t1);
+            span->b_left = (int)(v[1].b + (v[2].b - v[1].b) * t1);
+        }
     }
     double t2 = (double)(y - y0) / (double)(y2 - y0);
     span->x_right = v[0].x + p->offset_x + (v[2].x - v[0].x) * t2;
     span->u_right = v[0].u + (v[2].u - v[0].u) * t2;
     span->v_right = v[0].v + (v[2].v - v[0].v) * t2;
-    span->r_right = (int)(v[0].r + (v[2].r - v[0].r) * t2);
-    span->g_right = (int)(v[0].g + (v[2].g - v[0].g) * t2);
-    span->b_right = (int)(v[0].b + (v[2].b - v[0].b) * t2);
+    if (p->constant_color) {
+        span->r_left = span->r_right = v[0].r;
+        span->g_left = span->g_right = v[0].g;
+        span->b_left = span->b_right = v[0].b;
+    } else {
+        span->r_right = (int)(v[0].r + (v[2].r - v[0].r) * t2);
+        span->g_right = (int)(v[0].g + (v[2].g - v[0].g) * t2);
+        span->b_right = (int)(v[0].b + (v[2].b - v[0].b) * t2);
+    }
     if (span->x_left > span->x_right) {
         double swap = span->x_left;
         span->x_left = span->x_right;
@@ -88,4 +102,3 @@ static inline bool TextureTriangleSpanAt(const PreparedTextureTriangle *p,
     return span->x_start <= span->x_end;
 }
 #endif
-
