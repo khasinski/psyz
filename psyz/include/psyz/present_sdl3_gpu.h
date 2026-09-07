@@ -36,7 +36,9 @@ PsyzPresentSourceCB_SDL3GPU Psyz_PresentSource_SDL3GPU(
 // renderers that sample game textures/CLUTs directly. NULL before platform
 // initialization. Content reflects work submitted up to the previous
 // present; sample it only from work submitted before the current one.
+// Mutable live handle: exposing it disables mirror-copy skipping for this device.
 SDL_GPUTexture* Psyz_VideoGetVramTexture_SDL3GPU(void);
+// Borrowed sampling-only mirror, reused by the backend. Do not write to it.
 SDL_GPUTexture* Psyz_VideoSnapshotVramTexture_SDL3GPU(void);
 
 // Borrow the already-initialized presentation device; never creates one.

@@ -15,6 +15,7 @@
 #include "texture_triangle.h"
 #include "triangle_coverage.h"
 #include "vram_read_cache.h"
+#include "vram_sample_mask.h"
 
 #include "shaders/psx_vert_spv.h"
 #include "shaders/psx_frag_spv.h"
@@ -41,6 +42,8 @@ static bool swapchain_ok = false;
 static bool driver_vsync_requested;
 static bool host_display_sync;
 static SDL_GPUTexture* vram_render = NULL;
+static VramSampleMask sample_dirty;
+static bool external_vram_handle;
 static SDL_GPUTexture* vram_sample = NULL;
 static SDL_GPUSampler* vram_sampler = NULL;
 static SDL_GPUSampler* present_nearest_sampler = NULL;
@@ -96,6 +99,8 @@ static SDL_GPUCommandBuffer* AcquireCmd(void);
 static void SubmitCmd(void);
 
 SDL_GPUTexture* Psyz_VideoGetVramTexture_SDL3GPU(void) {
+    /* Raw handle users can record writes outside this backend's observers. */
+    if (vram_render) external_vram_handle = true;
     return vram_render;
 }
 
@@ -133,6 +138,7 @@ SDL_GPUTexture* Psyz_VideoSnapshotVramTexture_SDL3GPU(void) {
     SDL_CopyGPUTextureToTexture(copy, &source, &destination,
                                VRAM_W, VRAM_H, 1, true);
     SDL_EndGPUCopyPass(copy);
+    VramSampleMaskReset(&sample_dirty, false);
     SubmitCmd();
     return vram_sample;
 }
@@ -336,6 +342,8 @@ static SDL_GPUGraphicsPipeline* CreatePresentPipeline(
 }
 
 static bool CreateGpuResources(void) {
+    VramSampleMaskReset(&sample_dirty, true);
+    external_vram_handle = false;
     const SDL_GPUTextureCreateInfo render_info = {
         .type = SDL_GPU_TEXTURETYPE_2D,
         .format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
@@ -594,7 +602,6 @@ static SDL_GPUTexture* GetRenderTarget(void) {
     return internal_res <= 1 ? vram_render : scaled_vram_render;
 }
 
-static SDL_Rect vram_dirty = {0, 0, 0, 0};
 static void MarkVramDirty(SDL_Rect r) {
     if (r.w <= 0 || r.h <= 0) {
         return;
@@ -607,19 +614,8 @@ static void MarkVramDirty(SDL_Rect r) {
         return;
     }
     VramReadCacheInvalidate(&vram_read_cache, x0, y0, x1 - x0, y1 - y0);
-    if (vram_dirty.w <= 0 || vram_dirty.h <= 0) {
-        vram_dirty = (SDL_Rect){x0, y0, x1 - x0, y1 - y0};
-        return;
-    }
-    int ux0 = x0 < vram_dirty.x ? x0 : vram_dirty.x;
-    int uy0 = y0 < vram_dirty.y ? y0 : vram_dirty.y;
-    int ux1 =
-        x1 > vram_dirty.x + vram_dirty.w ? x1 : vram_dirty.x + vram_dirty.w;
-    int uy1 =
-        y1 > vram_dirty.y + vram_dirty.h ? y1 : vram_dirty.y + vram_dirty.h;
-    vram_dirty = (SDL_Rect){ux0, uy0, ux1 - ux0, uy1 - uy0};
+    VramSampleMaskMark(&sample_dirty, x0, y0, x1 - x0, y1 - y0);
 }
-static void ResetVramDirty(void) { vram_dirty = (SDL_Rect){0, 0, 0, 0}; }
 
 // mirror a native VRAM region into the scaled render target
 static void SyncNativeVramToScaled(int x, int y, int w, int h) {
@@ -2264,6 +2260,24 @@ void Draw_ResetBuffer(void) {
     batch_has_texture = false;
 }
 
+static bool BatchNeedsVramCopy(void) {
+    static int reference = -1;
+    if (reference < 0) reference = getenv("PSYZ_REFERENCE_FULL_VRAM_BATCH") != NULL;
+    if (reference || external_vram_handle) return true;
+    uint32_t previous = 0;
+    bool have_previous = false;
+    for (unsigned i = 0; i < n_vertices; ++i) {
+        const Vertex *vertex = &vertex_buf[i];
+        if (vertex->t & TPAGE_NOTEXTURE) continue;
+        uint32_t key = ((uint32_t)vertex->t << 16) | vertex->c;
+        if (have_previous && previous == key) continue;
+        previous = key;
+        have_previous = true;
+        if (VramSampleMaskTextureDirty(&sample_dirty, vertex->t, vertex->c)) return true;
+    }
+    return false;
+}
+
 void Draw_FlushBuffer(void) {
     if (n_vertices == 0) {
         return;
@@ -2298,18 +2312,24 @@ void Draw_FlushBuffer(void) {
         .transfer_buffer = vtx_transfer, .offset = idx_offset};
     const SDL_GPUBufferRegion idx_dst = {.buffer = ibuf, .size = idx_size};
     SDL_UploadToGPUBuffer(copy, &idx_src, &idx_dst, true);
-    if (batch_has_texture) {
+    bool copy_vram = batch_has_texture && BatchNeedsVramCopy();
+    static int trace_vram = -1;
+    if (trace_vram < 0) trace_vram = getenv("PSYZ_VRAM_BATCH_TRACE") != NULL;
+    if (trace_vram && batch_has_texture)
+        fprintf(stderr, "vram-batch-sync copy=%d bytes=%u vertices=%u\n",
+                copy_vram, copy_vram ? VRAM_W * VRAM_H * 4u : 0u, n_vertices);
+    if (copy_vram) {
         /* vram_render is both the framebuffer and PS1 VRAM, while shaders must
          * sample a separate texture to avoid a render-target feedback loop.
-         * Mirror the complete PS1 VRAM before every textured batch. Tracking
-         * only a bounding dirty rectangle is not sufficient: render passes,
-         * uploads and moves can reset or supersede that rectangle before a
-         * later batch samples an otherwise untouched texture page or CLUT. */
+         * Copy the complete mirror whenever a sampled page/CLUT may be stale.
+         * Dirty tiles survive unrelated batches and read-cache operations;
+         * only a complete mirror copy clears them. No partial texture copy
+         * or resource cycling can discard unchanged pages. */
         const SDL_GPUTextureLocation vram_src = {.texture = vram_render};
         const SDL_GPUTextureLocation vram_dst = {.texture = vram_sample};
         SDL_CopyGPUTextureToTexture(
             copy, &vram_src, &vram_dst, VRAM_W, VRAM_H, 1, false);
-        ResetVramDirty();
+        VramSampleMaskReset(&sample_dirty, false);
     }
     SDL_EndGPUCopyPass(copy);
 
