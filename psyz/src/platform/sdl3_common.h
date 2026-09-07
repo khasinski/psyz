@@ -815,11 +815,16 @@ static void PollEvents(void) {
         if (test_key && test_key[0]) {
             SDL_Scancode scancode = SDL_GetScancodeFromName(test_key);
             if (scancode != SDL_SCANCODE_UNKNOWN) {
-                SDL_Event synthetic = {0};
+                SDL_Event synthetic;
+                /* SDL_Event is a union: initialize the entire keyboard event,
+                 * including fields outside its first (type) member. */
+                SDL_zero(synthetic);
                 synthetic.type = SDL_EVENT_KEY_DOWN;
                 synthetic.key.scancode = scancode;
+                synthetic.key.down = true;
                 SDL_PushEvent(&synthetic);
                 synthetic.type = SDL_EVENT_KEY_UP;
+                synthetic.key.down = false;
                 SDL_PushEvent(&synthetic);
             }
             test_key_tap_sent = true;
