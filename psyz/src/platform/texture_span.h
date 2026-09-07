@@ -92,4 +92,24 @@ static inline int TextureSpanUnitRun(const PreparedTextureSpan *span,
     int before_wrap = 256 - first_u;
     return remaining < before_wrap ? remaining : before_wrap;
 }
+
+/* A fractional fixed-point step can still select consecutive texels. Bound
+ * the run by the first carry/borrow relative to a unit step, preserving the
+ * exact integer sampler rather than approximating its interpolation. */
+static inline int TextureSpanConsecutiveRun(const PreparedTextureSpan *span,
+        int x, uint16_t first_u, int remaining) {
+    if (span->step_u == 65536)
+        return TextureSpanUnitRun(span, first_u, remaining);
+    if (remaining < 1) return 0;
+    if (span->step_v || span->step_r || span->step_g || span->step_b ||
+        first_u > 255) return 1;
+    int count = remaining < 256 - first_u ? remaining : 256 - first_u;
+    int64_t fixed = (int64_t)span->fixed_u +
+        ((int64_t)x - span->x_start) * span->step_u;
+    int64_t fraction = (uint64_t)fixed & 65535;
+    int64_t drift = (int64_t)span->step_u - 65536;
+    int64_t limit = drift > 0 ? (65535 - fraction) / drift + 1 :
+        drift < 0 ? fraction / -drift + 1 : count;
+    return limit < count ? (int)limit : count;
+}
 #endif

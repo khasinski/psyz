@@ -1330,7 +1330,32 @@ void Draw_SetDisplayMode(DisplayMode* mode) {
     }
 }
 
-int Draw_ExequeSync() { return 0; }
+static struct {
+    Uint64 correction_ns, gouraud_ns, flush_ns;
+    unsigned correction_calls, gouraud_calls, flush_calls;
+} dispatch_profile;
+
+static bool DispatchProfileEnabled(void) {
+    static int enabled = -1;
+    if (enabled < 0) enabled = getenv("PSYZ_GPU_DISPATCH_TRACE") != NULL;
+    return enabled != 0;
+}
+
+int Draw_ExequeSync() {
+    if (DispatchProfileEnabled() &&
+        (dispatch_profile.correction_calls || dispatch_profile.flush_calls)) {
+        fprintf(stderr, "gpu-dispatch end_ns=%llu correction_ms=%.3f correction_calls=%u gouraud_ms=%.3f gouraud_calls=%u flush_ms=%.3f flush_calls=%u\n",
+            (unsigned long long)SDL_GetTicksNS(),
+            dispatch_profile.correction_ns / 1000000.0,
+            dispatch_profile.correction_calls,
+            dispatch_profile.gouraud_ns / 1000000.0,
+            dispatch_profile.gouraud_calls,
+            dispatch_profile.flush_ns / 1000000.0,
+            dispatch_profile.flush_calls);
+        memset(&dispatch_profile, 0, sizeof(dispatch_profile));
+    }
+    return 0;
+}
 
 // optimization to avoid sampling the VRAM on an untextured batch draw
 static bool batch_has_texture = false;
@@ -1517,7 +1542,7 @@ static void Draw_FillFlatQuadScanlineGaps(const Vertex source[4]) {
     }
 }
 
-static void Draw_FillTexturedQuadScanlineGaps(const Vertex source[4],
+static void Draw_FillTexturedQuadScanlineGapsInternal(const Vertex source[4],
                                               bool gouraud) {
     RasterPoint p[4];
     for (int i = 0; i < 4; i++) {
@@ -1627,7 +1652,7 @@ static void Draw_FillTexturedQuadScanlineGaps(const Vertex source[4],
                     if (!expected1 && has1 && span1.x_start > x && end >= span1.x_start)
                         end = span1.x_start - 1;
                     if (end > x_max) end = x_max;
-                    run = TextureSpanUnitRun(sample, expected_u, end - x + 1);
+                    run = TextureSpanConsecutiveRun(sample, x, expected_u, end - x + 1);
                 }
                 /* Do not move the original per-pixel flush boundary: later
                  * primitives can sample pixels written by an earlier batch. */
@@ -1643,6 +1668,21 @@ static void Draw_FillTexturedQuadScanlineGaps(const Vertex source[4],
                                                expected_b);
                 i += run - 1;
             }
+        }
+    }
+}
+
+static void Draw_FillTexturedQuadScanlineGaps(const Vertex source[4], bool gouraud) {
+    bool profile = DispatchProfileEnabled();
+    Uint64 start = profile ? SDL_GetTicksNS() : 0;
+    Draw_FillTexturedQuadScanlineGapsInternal(source, gouraud);
+    if (profile) {
+        Uint64 elapsed = SDL_GetTicksNS() - start;
+        dispatch_profile.correction_ns += elapsed;
+        dispatch_profile.correction_calls++;
+        if (gouraud) {
+            dispatch_profile.gouraud_ns += elapsed;
+            dispatch_profile.gouraud_calls++;
         }
     }
 }
@@ -2278,7 +2318,7 @@ static bool BatchNeedsVramCopy(void) {
     return false;
 }
 
-void Draw_FlushBuffer(void) {
+static void Draw_FlushBufferInternal(void) {
     if (n_vertices == 0) {
         return;
     }
@@ -2388,4 +2428,14 @@ void Draw_FlushBuffer(void) {
     }
     SyncScaledVramToNative();
     Draw_ResetBuffer();
+}
+
+void Draw_FlushBuffer(void) {
+    bool profile = n_vertices != 0 && DispatchProfileEnabled();
+    Uint64 start = profile ? SDL_GetTicksNS() : 0;
+    Draw_FlushBufferInternal();
+    if (profile) {
+        dispatch_profile.flush_ns += SDL_GetTicksNS() - start;
+        dispatch_profile.flush_calls++;
+    }
 }
