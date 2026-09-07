@@ -60,11 +60,17 @@ static inline bool TextureSampleAt(const TextureSamplePlane *p, int x, int y,
     }
     double raw_u = p->u + p->du_dx * (x - p->ax) + p->du_dy * (y - p->ay);
     double raw_v = p->v + p->dv_dx * (x - p->ax) + p->dv_dy * (y - p->ay);
-    int sample_u = (int)floor(raw_u), sample_v = (int)floor(raw_v);
+    double floor_u = floor(raw_u), floor_v = floor(raw_v);
+    int sample_u = (int)floor_u, sample_v = (int)floor_v;
     *u = (uint16_t)(sample_u < 0 ? 0 : sample_u > 255 ? 255 : sample_u);
     *v = (uint16_t)(sample_v < 0 ? 0 : sample_v > 255 ? 255 : sample_v);
-    return fabs(raw_u - round(raw_u)) < 1e-7 ||
-           fabs(raw_v - round(raw_v)) < 1e-7;
+    /* The nearest integer is one of the two endpoints already identified
+     * by floor. Keep the subtraction against that integer (rather than
+     * subtracting a rounded fractional part) at the strict tolerance edge. */
+    return fabs(raw_u - floor_u) < 1e-7 ||
+           fabs(raw_u - (floor_u + 1.0)) < 1e-7 ||
+           fabs(raw_v - floor_v) < 1e-7 ||
+           fabs(raw_v - (floor_v + 1.0)) < 1e-7;
 }
 
 #endif
