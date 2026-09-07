@@ -38,6 +38,8 @@ typedef struct {
 static SDL_GPUDevice* device = NULL;
 static VramReadCache vram_read_cache;
 static bool swapchain_ok = false;
+static bool driver_vsync_requested;
+static bool host_display_sync;
 static SDL_GPUTexture* vram_render = NULL;
 static SDL_GPUTexture* vram_sample = NULL;
 static SDL_GPUSampler* vram_sampler = NULL;
@@ -561,11 +563,12 @@ bool InitPlatform() {
 }
 
 static void PlatformBackend_SetDriverVsync(bool enable) {
+    driver_vsync_requested = enable;
     if (!device || !swapchain_ok) {
         return;
     }
     SDL_GPUPresentMode mode = SDL_GPU_PRESENTMODE_VSYNC;
-    if (!enable) {
+    if (!enable && !host_display_sync) {
         if (SDL_WindowSupportsGPUPresentMode(
                 device, sdl3_window, SDL_GPU_PRESENTMODE_IMMEDIATE)) {
             mode = SDL_GPU_PRESENTMODE_IMMEDIATE;
@@ -574,8 +577,15 @@ static void PlatformBackend_SetDriverVsync(bool enable) {
             mode = SDL_GPU_PRESENTMODE_MAILBOX;
         }
     }
-    SDL_SetGPUSwapchainParameters(
-        device, sdl3_window, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, mode);
+    if (!SDL_SetGPUSwapchainParameters(
+            device, sdl3_window, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, mode)) {
+        WARNF("could not set presentation synchronization: %s", SDL_GetError());
+    } else {
+        INFOF("presentation mode=%s host_display_sync=%d logic_driver_vsync=%d",
+            mode == SDL_GPU_PRESENTMODE_VSYNC ? "vsync" :
+            mode == SDL_GPU_PRESENTMODE_MAILBOX ? "mailbox" : "immediate",
+            (int)host_display_sync, (int)driver_vsync_requested);
+    }
 }
 
 static void UpdateScissor(void);
@@ -770,9 +780,18 @@ static void PlatformBackend_Present(void) {
          * present draw with a stale cache. */
         present_source.filter = SDL_GPU_FILTER_NEAREST;
         present_source_cb(&present_source);
+        if (host_display_sync != present_source.sync_to_display) {
+            host_display_sync = present_source.sync_to_display;
+            /* This changes swapchain scheduling only. The common emulated
+             * VBlank clock/use_driver_vsync value remains untouched. */
+            PlatformBackend_SetDriverVsync(driver_vsync_requested);
+        }
         /* A host may pace presentation independently of emulated VBlank.
          * Do not queue a duplicate image at a logic-only tick. */
         if (present_source.skip_present && !debug_show_vram) return;
+    } else if (host_display_sync) {
+        host_display_sync = false;
+        PlatformBackend_SetDriverVsync(driver_vsync_requested);
     }
 
     SDL_GPUCommandBuffer* cmd = AcquireCmd();
@@ -896,6 +915,7 @@ static void PlatformBackend_Present(void) {
 }
 
 static void QuitPlatform(void) {
+    host_display_sync = false;
     VramReadCacheReset(&vram_read_cache);
     /* Retire encoded work before clients release resources referenced by it.
      * Waiting alone does not submit the backend's pending command buffer. */

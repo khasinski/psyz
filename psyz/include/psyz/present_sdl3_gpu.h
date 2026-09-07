@@ -17,6 +17,10 @@ typedef struct PsyzPresentSourceInfo {
     float aspect;            /* presented aspect ratio; 0 means w/h */
     SDL_GPUFilter filter;    /* scaling filter, preset to NEAREST */
     bool skip_present;      /* no swapchain work; VSync/input timing still runs */
+    /* Synchronize this host renderer to display VBlank independently of the
+     * emulated VSync/frame limiter. Zero retains the platform's normal policy.
+     * Applied before swapchain acquisition, including skipped host frames. */
+    bool sync_to_display;
 } PsyzPresentSourceInfo;
 
 // Called with `info` zeroed apart from `filter`. The debug whole-VRAM view
